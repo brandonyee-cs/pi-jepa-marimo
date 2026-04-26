@@ -2,8 +2,8 @@
 # requires-python = ">=3.12"
 # dependencies = [
 #     "marimo>=0.23.2",
-#     "numpy==2.4.4",
-#     "matplotlib==3.10.8",
+#     "numpy>=1.26",
+#     "matplotlib>=3.9",
 # ]
 # ///
 """
@@ -18,10 +18,9 @@ Paper results are pre-loaded from pijepa_toolkit.py.
 
 import marimo
 
-__generated_with = "0.23.0"
+__generated_with = "0.23.3"
 app = marimo.App(
     width="medium",
-    css_file="/usr/local/_marimo/custom.css",
     auto_download=["html"],
 )
 
@@ -35,7 +34,6 @@ def _imports():
     import sys, os
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) if "__file__" in dir() else ".")
     import pijepa_toolkit as T
-
     return T, gridspec, mo, np, plt
 
 
@@ -62,14 +60,6 @@ def _rcparams(plt):
 
 
 @app.cell(hide_code=True)
-def _title(mo):
-    mo.md(r"""
- 
-    """)
-    return
-
-
-@app.cell(hide_code=True)
 def _(mo):
     mo.center(mo.Html("""
     <div style="text-align:center; padding: 0.5rem 0 0.3rem;">
@@ -78,10 +68,10 @@ def _(mo):
         Closing the Simulation&nbsp;Budget&nbsp;Gap
       </h1>
       <p style="font-family: Georgia, serif; font-size: 1.3rem; color:#455A64;
-                margin: 0.4rem 0 0;">
+                margin: 0.4rem 0 0; text-align:center;">
         PI-JEPA: Physics-Informed JEPA for Data-Efficient PDE Surrogates
       </p>
-      <p style="font-size: 0.85rem; color:#78909C; margin-top: 0.5rem;">
+      <p style="font-size: 0.85rem; color:#78909C; margin-top: 0.5rem; text-align:center;">
         <span style="color:#546E7A;">Notebook:</span>
         Brandon&nbsp;Yee &middot; Pairie&nbsp;Koh &middot; Jacob&nbsp;Crainic &middot; Peter&nbsp;Li
         &nbsp;|&nbsp;
@@ -109,12 +99,12 @@ def _hero_plot(T, gridspec, hero_seed, mo, np, plt):
         seed = int(hero_seed.value)
 
         if _CACHE is not None:
-            K     = _CACHE[f"h_K_{seed}"]
-            p     = _CACHE[f"h_p_{seed}"]
-            ux    = _CACHE[f"h_ux_{seed}"]
-            uy    = _CACHE[f"h_uy_{seed}"]
-            ctx   = _CACHE[f"h_ctx_{seed}"].astype(bool)
-            tgt   = _CACHE[f"h_tgt_{seed}"].astype(bool)
+            K   = _CACHE[f"h_K_{seed}"]
+            p   = _CACHE[f"h_p_{seed}"]
+            ux  = _CACHE[f"h_ux_{seed}"]
+            uy  = _CACHE[f"h_uy_{seed}"]
+            ctx = _CACHE[f"h_ctx_{seed}"].astype(bool)
+            tgt = _CACHE[f"h_tgt_{seed}"].astype(bool)
         else:
             K  = T.make_permeability_channelized(n, n_layers=3, seed=seed)
             p  = T.solve_darcy_fd(K)
@@ -128,7 +118,6 @@ def _hero_plot(T, gridspec, hero_seed, mo, np, plt):
         ext = [0, 1, 0, 1]
         xs  = np.linspace(0, 1, n)
 
-        # Panel 1 — permeability K
         ax0 = fig.add_subplot(gs[0])
         im0 = ax0.imshow(np.log10(K).T, origin="lower", cmap="RdYlGn",
                           extent=ext, vmin=-2, vmax=2)
@@ -136,7 +125,6 @@ def _hero_plot(T, gridspec, hero_seed, mo, np, plt):
         ax0.set_title("Permeability  $K$\n(geostat. draw — free)", fontsize=10)
         ax0.set_xlabel("$x$"); ax0.set_ylabel("$y$")
 
-        # Panel 2 — pressure p (requires PDE solve)
         ax1 = fig.add_subplot(gs[1])
         im1 = ax1.imshow(p.T, origin="lower", cmap="Blues_r",
                           extent=ext, vmin=0, vmax=1)
@@ -144,7 +132,6 @@ def _hero_plot(T, gridspec, hero_seed, mo, np, plt):
         ax1.set_title("Pressure  $p$\n(PDE solve — costly)", fontsize=10)
         ax1.set_xlabel("$x$")
 
-        # Panel 3 — Darcy velocity + PI-JEPA masking overlay
         ax2 = fig.add_subplot(gs[2])
         ax2.imshow(speed.T, origin="lower", cmap="hot", extent=ext)
         s = 4
@@ -160,7 +147,6 @@ def _hero_plot(T, gridspec, hero_seed, mo, np, plt):
         ax2.set_title("Velocity + PI-JEPA masks\n(blue=context, red=target)", fontsize=10)
         ax2.set_xlabel("$x$")
 
-        # Panel 4 — data efficiency teaser
         ax3 = fig.add_subplot(gs[3])
         nl  = np.array(T.N_LABELS)
         ax3.semilogy(nl, T.DARCY["FNO"],    "^--", color=T.C_FNO,
@@ -259,17 +245,20 @@ def _asym_plot(T, cost_nl, cost_nu, mo, plt):
         cols  = [T.C_PRETRAIN, T.C_FNO]
         bars  = axes[0].bar(cats, costs, color=cols, alpha=0.88, width=0.5,
                               edgecolor="white", linewidth=1.5)
+        axes[0].set_yscale("log")
+        y_min, y_max = 1e-3, max(costs) * 10
+        axes[0].set_ylim(y_min, y_max)
         for bar, h in zip(bars, costs):
-            label = f"{h:.2f} h" if h < 10 else f"{h:.0f} h"
-            axes[0].text(bar.get_x() + bar.get_width() / 2, h * 1.15,
+            label = f"{h:.4f} h" if h < 0.01 else (f"{h:.2f} h" if h < 10 else f"{h:.0f} h")
+            label_y = max(h * 2.0, y_min * 3)
+            axes[0].text(bar.get_x() + bar.get_width() / 2, label_y,
                           label, ha="center", va="bottom",
-                          fontsize=11, fontweight="bold")
+                          fontsize=11, fontweight="bold",
+                          color="white" if h < 0.01 else "black")
         axes[0].set_ylabel("Total CPU hours")
         axes[0].set_title(
             f"Data generation cost\n$N_u$={nu:,} unlabeled  vs  $N_\\ell$={nl} labeled",
             fontsize=11)
-        axes[0].set_yscale("log")
-        axes[0].set_ylim(1e-3, max(costs) * 10)
 
         unit = [cm["unlabeled"]["unit_cost_s"], cm["labeled"]["unit_cost_s"]]
         axes[1].bar(cats, unit, color=cols, alpha=0.88, width=0.5,
@@ -328,8 +317,8 @@ def _arch_md(mo):
 
 
 @app.cell(hide_code=True)
-def _arch_html():
-    html = r"""
+def _arch_html(mo):
+    mo.center(mo.Html("""
     <div style="font-family:'Helvetica Neue',Arial,sans-serif; background:#F8FAFC;
                 border-radius:12px; padding:22px 28px; max-width:900px;
                 margin:0 auto; border:1.5px solid #B0BEC5;">
@@ -348,16 +337,16 @@ def _arch_html():
           <div style="font-size:0.68rem; color:#66BB6A;">milliseconds each</div>
         </div>
 
-        <div style="font-size:1.4rem; color:#546E7A;">→</div>
+        <div style="font-size:1.4rem; color:#546E7A;">&#8594;</div>
 
         <div style="background:#E3F2FD; border:1.5px solid #42A5F5; border-radius:8px;
                     padding:9px 13px; text-align:center; min-width:128px;">
           <div style="font-size:0.78rem; color:#1565C0;">Fourier Encoder</div>
-          <div style="font-size:1.1rem; font-weight:bold; color:#0D47A1;">f<sub>θ</sub></div>
+          <div style="font-size:1.1rem; font-weight:bold; color:#0D47A1;">f<sub>&theta;</sub></div>
           <div style="font-size:0.68rem; color:#42A5F5;">6 Fourier + 4 attention layers<br>d=384 patch embeddings</div>
         </div>
 
-        <div style="font-size:1.4rem; color:#546E7A;">→</div>
+        <div style="font-size:1.4rem; color:#546E7A;">&#8594;</div>
 
         <div style="border:1.5px dashed #FFA726; border-radius:8px;
                     padding:8px 12px; background:#FFF8E1; text-align:center;">
@@ -365,25 +354,25 @@ def _arch_html():
           <div style="display:flex; gap:6px; justify-content:center;">
             <div style="background:#FFE082; border-radius:5px; padding:4px 10px;
                         font-size:0.84rem; font-weight:bold; color:#E65100;">
-              g<sub>φ₁</sub><br>
-              <span style="font-size:0.63rem; font-weight:normal;">L₁: pressure</span>
+              g<sub>&phi;&#8321;</sub><br>
+              <span style="font-size:0.63rem; font-weight:normal;">L&#8321;: pressure</span>
             </div>
             <div style="background:#FFCC02; border-radius:5px; padding:4px 10px;
                         font-size:0.84rem; font-weight:bold; color:#E65100;">
-              g<sub>φ₂</sub><br>
-              <span style="font-size:0.63rem; font-weight:normal;">L₂: saturation</span>
+              g<sub>&phi;&#8322;</sub><br>
+              <span style="font-size:0.63rem; font-weight:normal;">L&#8322;: saturation</span>
             </div>
           </div>
-          <div style="font-size:0.63rem; color:#BF360C; margin-top:4px;">Lie–Trotter aligned</div>
+          <div style="font-size:0.63rem; color:#BF360C; margin-top:4px;">Lie&#8211;Trotter aligned</div>
         </div>
 
-        <div style="font-size:1.4rem; color:#546E7A;">→</div>
+        <div style="font-size:1.4rem; color:#546E7A;">&#8594;</div>
 
         <div style="background:#FCE4EC; border:1.5px solid #EC407A; border-radius:8px;
                     padding:9px 13px; text-align:center; min-width:114px;">
           <div style="font-size:0.78rem; color:#880E4F;">EMA Target</div>
-          <div style="font-size:1.1rem; font-weight:bold; color:#880E4F;">f<sub>ξ</sub></div>
-          <div style="font-size:0.68rem; color:#EC407A;">ξ ← 0.996 ξ + 0.004 θ</div>
+          <div style="font-size:1.1rem; font-weight:bold; color:#880E4F;">f<sub>&xi;</sub></div>
+          <div style="font-size:0.68rem; color:#EC407A;">&xi; &larr; 0.996 &xi; + 0.004 &theta;</div>
         </div>
 
         <div style="font-size:1.3rem; color:#546E7A;">+</div>
@@ -391,7 +380,7 @@ def _arch_html():
         <div style="background:#EDE7F6; border:1.5px solid #7E57C2; border-radius:8px;
                     padding:9px 13px; text-align:center; min-width:114px;">
           <div style="font-size:0.78rem; color:#4527A0;">VICReg</div>
-          <div style="font-size:0.70rem; color:#7E57C2;">var + cov regularizer<br>→ prevents collapse<br>+17.7% in ablation</div>
+          <div style="font-size:0.70rem; color:#7E57C2;">var + cov regularizer<br>&rarr; prevents collapse<br>+17.7% in ablation</div>
         </div>
       </div>
 
@@ -399,7 +388,7 @@ def _arch_html():
 
       <div style="text-align:center; font-size:0.73rem; color:#78909C;
                   letter-spacing:0.1em; text-transform:uppercase; margin-bottom:10px;">
-        Phase 2 — Fine-tune on N<sub>ℓ</sub> labeled runs
+        Phase 2 &mdash; Fine-tune on N<sub>&ell;</sub> labeled runs
       </div>
 
       <div style="display:flex; align-items:center; gap:9px; justify-content:center; flex-wrap:wrap;">
@@ -408,36 +397,36 @@ def _arch_html():
                     padding:9px 16px; text-align:center; min-width:100px;">
           <div style="font-size:0.78rem; color:#388E3C;">Labeled pairs</div>
           <div style="font-size:1.0rem; font-weight:bold; color:#1B5E20;">(K, p)<sup>(j)</sup></div>
-          <div style="font-size:0.68rem; color:#66BB6A; font-style:italic;">1–24 h each</div>
+          <div style="font-size:0.68rem; color:#66BB6A; font-style:italic;">1&ndash;24 h each</div>
         </div>
 
-        <div style="font-size:1.4rem; color:#546E7A;">→</div>
+        <div style="font-size:1.4rem; color:#546E7A;">&#8594;</div>
 
         <div style="background:#E3F2FD; border:2px solid #1565C0; border-radius:8px;
                     padding:9px 13px; text-align:center; min-width:128px;">
-          <div style="font-size:0.78rem; color:#1565C0;">Pretrained f<sub>θ</sub></div>
-          <div style="font-size:0.70rem; color:#42A5F5;">full fine-tune, LR×0.2<br>300 epochs, AdamW</div>
+          <div style="font-size:0.78rem; color:#1565C0;">Pretrained f<sub>&theta;</sub></div>
+          <div style="font-size:0.70rem; color:#42A5F5;">full fine-tune, LR&times;0.2<br>300 epochs, AdamW</div>
         </div>
 
-        <div style="font-size:1.4rem; color:#546E7A;">→</div>
+        <div style="font-size:1.4rem; color:#546E7A;">&#8594;</div>
 
         <div style="background:#F3E5F5; border:1.5px solid #AB47BC; border-radius:8px;
                     padding:9px 13px; text-align:center; min-width:108px;">
           <div style="font-size:0.78rem; color:#6A1B9A;">Prediction Head</div>
-          <div style="font-size:0.70rem; color:#AB47BC;">unpatchify + 2×conv → p̂</div>
+          <div style="font-size:0.70rem; color:#AB47BC;">unpatchify + 2&times;conv &rarr; p&#770;</div>
         </div>
 
-        <div style="font-size:1.4rem; color:#546E7A;">→</div>
+        <div style="font-size:1.4rem; color:#546E7A;">&#8594;</div>
 
         <div style="background:#E8EAF6; border:1.5px solid #3F51B5; border-radius:8px;
                     padding:9px 16px; text-align:center; min-width:108px;">
           <div style="font-size:0.78rem; color:#1A237E;">Output</div>
-          <div style="font-size:1.1rem; font-weight:bold; color:#1A237E;">p̂</div>
-          <div style="font-size:0.68rem; color:#3F51B5;">1.8–2.7× better than FNO</div>
+          <div style="font-size:1.1rem; font-weight:bold; color:#1A237E;">p&#770;</div>
+          <div style="font-size:0.68rem; color:#3F51B5;">1.8&ndash;2.7&times; better than FNO</div>
         </div>
       </div>
     </div>
-    """
+    """))
     return
 
 
@@ -478,7 +467,7 @@ def _split_plot(T, gridspec, mo, np, plt, sp_seed, sp_typ):
     def _draw():
         n    = 32
         seed = int(sp_seed.value)
-        kind = sp_typ.value   # "GRF" or "channelized"
+        kind = sp_typ.value
 
         prefix = "sg" if kind == "GRF" else "sc"
         if _CACHE is not None and seed < 30:
@@ -493,7 +482,6 @@ def _split_plot(T, gridspec, mo, np, plt, sp_seed, sp_typ):
             p = T.solve_darcy_fd(K)
             ux, uy = T.darcy_velocity(K, p)
 
-        # Saturation proxy: advect a Gaussian blob using the Darcy velocity
         xs = np.linspace(0, 1, n)
         XX, YY = np.meshgrid(xs, xs, indexing="ij")
         S0 = np.exp(-((XX - 0.5)**2 + (YY - 0.5)**2) / 0.08**2)
@@ -511,14 +499,12 @@ def _split_plot(T, gridspec, mo, np, plt, sp_seed, sp_typ):
         s    = max(1, n // 10)
         X2, Y2 = np.meshgrid(xs[::s], xs[::s], indexing="ij")
 
-        # K
         ax = fig.add_subplot(gs2[0])
         ax.imshow(np.log10(K).T, origin="lower", cmap="RdYlGn",
                    extent=ext, vmin=-2, vmax=2)
         ax.set_title("Permeability  $K$\n(input — free)", fontsize=10)
         ax.set_xlabel("$x$"); ax.set_ylabel("$y$")
 
-        # L1: pressure (context for predictor g_φ1)
         ax = fig.add_subplot(gs2[1])
         im1 = ax.imshow(p.T, origin="lower", cmap="Blues_r", extent=ext)
         plt.colorbar(im1, ax=ax, shrink=0.82)
@@ -526,7 +512,6 @@ def _split_plot(T, gridspec, mo, np, plt, sp_seed, sp_typ):
                       fontsize=10, color=T.C_PIJEPA)
         ax.set_xlabel("$x$")
 
-        # L2: saturation transport (target for predictor g_φ2)
         ax = fig.add_subplot(gs2[2])
         ax.imshow(S0.T, origin="lower", cmap="Oranges", extent=ext, alpha=0.65)
         ax.quiver(X2, Y2, ux[::s, ::s].T, uy[::s, ::s].T,
@@ -535,7 +520,6 @@ def _split_plot(T, gridspec, mo, np, plt, sp_seed, sp_typ):
                       fontsize=10, color=T.C_FNO)
         ax.set_xlabel("$x$")
 
-        # PI-JEPA context mask (what g_φ1 sees)
         ax = fig.add_subplot(gs2[3])
         ax.imshow(S0.T, origin="lower", cmap="Oranges", extent=ext)
         overlay_ctx = np.ma.masked_where(~ctx_L1.T, np.ones((n, n)))
@@ -545,7 +529,6 @@ def _split_plot(T, gridspec, mo, np, plt, sp_seed, sp_typ):
                       fontsize=10, color=T.C_PRETRAIN)
         ax.set_xlabel("$x$")
 
-        # PI-JEPA target (what g_φ2 must predict)
         ax = fig.add_subplot(gs2[4])
         im4 = ax.imshow(dS.T, origin="lower", cmap="RdBu_r",
                           extent=ext, vmin=-0.15, vmax=0.15)
@@ -632,9 +615,9 @@ def _de_plot(T, bench_sel, methods_sel, mo, nl_line, np, plt):
         ax.axvline(nl_h, color=T.C_ACCENT, lw=1.8, ls=":", alpha=0.9)
 
         if "PI-JEPA" in mth and "FNO" in mth:
-            idx_h   = T.N_LABELS.index(nl_h) if nl_h in T.N_LABELS else 0
-            v_pj    = data["PI-JEPA"][idx_h]
-            v_fno   = data["FNO"][idx_h]
+            idx_h = T.N_LABELS.index(nl_h) if nl_h in T.N_LABELS else 0
+            v_pj  = data["PI-JEPA"][idx_h]
+            v_fno = data["FNO"][idx_h]
             if v_fno > v_pj:
                 factor = v_fno / v_pj
                 ax.text(nl_h * 1.06, v_pj * 1.5,
@@ -755,17 +738,15 @@ def _abl_plot(T, mo, np, plt):
         ax2.set_title("Δ from full model\n(red = essential; teal = honest negative)",
                        fontsize=12)
 
-        # Honest negative annotation
         phr = names.index("w/o physics residual")
-        ax2.text(deltas[phr] * 100 - 0.2, phr,
-                  " ← removing it\n   helps (−8.1%)",
-                  fontsize=8, color=T.C_PRETRAIN, va="center", ha="right")
+        ax2.text(0.5, phr,
+                  "removing it helps (−8.1%) →",
+                  fontsize=8, color=T.C_PRETRAIN, va="center", ha="left")
 
-        # Essential component annotations
-        ax2.text(deltas[2] * 100 + 0.15, 2,
+        ax2.text(deltas[2] * 100 + 0.3, 2,
                   f"+{deltas[2]*100:.1f}%  essential",
                   fontsize=8.5, color=T.C_FNO, va="center")
-        ax2.text(deltas[3] * 100 + 0.15, 3,
+        ax2.text(deltas[3] * 100 + 0.3, 3,
                   f"+{deltas[3]*100:.1f}%  essential",
                   fontsize=8.5, color=T.C_FNO, va="center")
 
@@ -914,9 +895,9 @@ def _transfer_plot(T, mo, plt):
     def _draw():
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11.5, 4.2),
                                         constrained_layout=True)
-        tcols = {"Domain-matched": T.C_PIJEPA,
+        tcols = {"Domain-matched":   T.C_PIJEPA,
                  "Darcy-pretrained": T.C_ACCENT,
-                 "Scratch": T.C_SCRATCH}
+                 "Scratch":          T.C_SCRATCH}
         tls   = {"Domain-matched": "-", "Darcy-pretrained": "--", "Scratch": ":"}
 
         for m, vals in T.TRANSFER_2PHASE.items():
@@ -960,81 +941,7 @@ def _limits_md(mo):
 
 
 @app.cell(hide_code=True)
-def _limits_plot():
-
-    def _limits_plot(T, mo, np, plt):
-        def _draw():
-            fig, axes = plt.subplots(1, 3, figsize=(14.5, 4.0), constrained_layout=True)
-            nl = np.array(T.N_LABELS)
-
-            # Panel 1 — physics residual is neutral
-            ax = axes[0]
-            names4 = ["Full PI-JEPA", "w/o physics residual",
-                       "w/o operator splitting", "w/o VICReg"]
-            vals4  = [T.ABLATION[n][0] for n in names4]
-            cis4   = [T.ABLATION[n][1] for n in names4]
-            cols4  = [T.C_PIJEPA, T.C_PRETRAIN, T.C_FNO, T.C_FNO]
-            ax.barh(range(4), vals4, xerr=cis4, color=cols4, alpha=0.82,
-                     edgecolor="white", lw=1.2, height=0.55,
-                     error_kw=dict(ecolor="#546E7A", capsize=4))
-            ax.set_yticks(range(4))
-            ax.set_yticklabels([n.replace(" w/o", "\nw/o") for n in names4], fontsize=8.5)
-            ax.set_xlabel("Rel. $\\ell_2$ error at $N_\\ell=100$")
-            ax.set_title("1. Physics residual is neutral:\nremoving it helps by 8.1%", fontsize=11)
-            ax.axvline(vals4[0], color=T.C_PIJEPA, lw=2, ls="--", alpha=0.7)
-            ax.text(vals4[1] - 0.003, 1, "← better", fontsize=8.5,
-                     color=T.C_PRETRAIN, va="center", ha="right")
-
-            # Panel 2 — ADR crossover at Nℓ=500
-            ax = axes[1]
-            ax.semilogy(nl, T.ADR["PI-JEPA"], "o-",  color=T.C_PIJEPA, lw=2.5, ms=7,
-                         label="PI-JEPA", clip_on=False)
-            ax.semilogy(nl, T.ADR["Scratch"], "s--", color=T.C_SCRATCH, lw=2.0, ms=6,
-                         label="Scratch", clip_on=False)
-            ax.semilogy(nl, T.ADR["FNO"],     "^:",  color=T.C_FNO,    lw=1.8, ms=5,
-                         label="FNO", clip_on=False)
-            ax.fill_between(nl[-2:], T.ADR["PI-JEPA"][-2:], T.ADR["Scratch"][-2:],
-                             where=np.array(T.ADR["Scratch"][-2:]) < np.array(T.ADR["PI-JEPA"][-2:]),
-                             color=T.C_SCRATCH, alpha=0.25)
-            ax.set_xlabel("$N_\\ell$"); ax.set_ylabel("Rel. $\\ell_2$ error")
-            ax.set_title("2. ADR at $N_\\ell=500$:\nscratch (0.024) beats PI-JEPA (0.065)", fontsize=11)
-            ax.legend(fontsize=9, frameon=False)
-            ax.annotate("Scratch wins!", xy=(500, T.ADR["Scratch"][-1]),
-                         xytext=(350, 0.033),
-                         arrowprops=dict(arrowstyle="->", color=T.C_SCRATCH),
-                         color=T.C_SCRATCH, fontsize=9)
-
-            # Panel 3 — Darcy crossover at Nℓ=250
-            ax = axes[2]
-            ax.semilogy(nl, T.DARCY["PI-JEPA"], "o-",  color=T.C_PIJEPA, lw=2.5, ms=7,
-                         label="PI-JEPA", clip_on=False)
-            ax.semilogy(nl, T.DARCY["FNO"],     "^--", color=T.C_FNO,    lw=2.0, ms=6,
-                         label="FNO", clip_on=False)
-            d_pj  = np.array(T.DARCY["PI-JEPA"])
-            d_fno = np.array(T.DARCY["FNO"])
-            ax.fill_between(nl[:4], d_pj[:4], d_fno[:4],
-                             where=d_pj[:4] < d_fno[:4],
-                             color=T.C_PIJEPA, alpha=0.20, label="PI-JEPA wins")
-            ax.fill_between(nl[-3:], d_pj[-3:], d_fno[-3:],
-                             where=d_fno[-3:] < d_pj[-3:],
-                             color=T.C_FNO, alpha=0.20, label="FNO wins")
-            ax.axvline(250, color="#78909C", lw=1.5, ls=":")
-            ax.text(260, 0.07, "FNO takes over", fontsize=8.5, color=T.C_FNO)
-            ax.set_xlabel("$N_\\ell$"); ax.set_ylabel("Rel. $\\ell_2$ error")
-            ax.set_title("3. Darcy: FNO wins at $N_\\ell \\geq 250$\n(spectral bias matches problem)",
-                          fontsize=11)
-            ax.legend(fontsize=9, frameon=False)
-
-            return fig
-
-        mo.center(_draw())
-        return
-
-    return
-
-
-@app.cell(hide_code=True)
-def _(T, mo, np, plt):
+def _limits_plot(T, mo, np, plt):
     def _draw():
         fig, axes = plt.subplots(1, 3, figsize=(14.5, 4.0), constrained_layout=True)
         nl = np.array(T.N_LABELS)
@@ -1054,8 +961,8 @@ def _(T, mo, np, plt):
         ax.set_xlabel("Rel. $\\ell_2$ error at $N_\\ell=100$")
         ax.set_title("1. Physics residual is neutral:\nremoving it helps by 8.1%", fontsize=11)
         ax.axvline(vals4[0], color=T.C_PIJEPA, lw=2, ls="--", alpha=0.7)
-        ax.text(vals4[1] - 0.003, 1, "← better", fontsize=8.5,
-                 color=T.C_PRETRAIN, va="center", ha="right")
+        ax.text(vals4[0] + 0.001, 1, "removing it helps →",
+                 fontsize=8, color=T.C_PRETRAIN, va="center", ha="left")
 
         # Panel 2 — ADR crossover at Nℓ=500
         ax = axes[1]
@@ -1172,20 +1079,18 @@ def _sigreg_plot(T, mo, np, plt, sr_M, sr_col, sr_d):
 
         fig, axes = plt.subplots(1, 3, figsize=(13.5, 4.2), constrained_layout=True)
 
-        # Eigenspectrum
         ax = axes[0]
         ax.semilogy(np.arange(d), eigs_iso,   lw=2, color=T.C_PRETRAIN,
                      label="Isotropic (good)")
         ax.semilogy(np.arange(d), eigs_aniso, lw=2, color=T.C_FNO,
                      label=f"Anisotropic ({n_col}/{d} collapsed)")
         ax.axhline(0.05, color=T.C_ACCENT, lw=1.5, ls="--", label="Collapse threshold")
-        ax.axvspan(0, n_col, alpha=0.10, color=T.C_FNO)
+        ax.axvspan(0, max(n_col, 1), alpha=0.10, color=T.C_FNO)
         ax.set_xlabel("Eigenvalue index")
         ax.set_ylabel("Eigenvalue")
         ax.set_title(f"Covariance eigenspectrum\n({n_col}/{d} dims collapsed)", fontsize=11)
         ax.legend(fontsize=8, frameon=False)
 
-        # SIGReg bar
         ax = axes[1]
         bars = ax.bar(["Isotropic\n(good)", f"Anisotropic\n({int(pct*100)}% collapsed)"],
                        [loss_iso, loss_aniso],
@@ -1199,7 +1104,6 @@ def _sigreg_plot(T, mo, np, plt, sr_M, sr_col, sr_d):
         ax.set_title(f"SIGReg detects collapse\n($M={M}$ projection slices)", fontsize=11)
         ax.set_yscale("log")
 
-        # SIGReg across M
         ax = axes[2]
         M_vals   = [4, 8, 16, 32, 64, 128, 256]
         losses_i = [T.sigreg_epps_pulley(Z_iso,   n_slices=m) for m in M_vals]
@@ -1254,7 +1158,7 @@ def _conclusion(mo):
     ---
 
     *Paper:* [arXiv:2604.01349](https://arxiv.org/abs/2604.01349) ·
-    Yee & Koh, Yee Collins Research Group.
+    Yee & Koh, Yee Collins Research Group / Hoover Institution at Stanford, 2026.
 
     *LeJEPA backbone:* [arXiv:2511.08544](https://arxiv.org/abs/2511.08544) ·
     Balestriero & LeCun, 2025.
