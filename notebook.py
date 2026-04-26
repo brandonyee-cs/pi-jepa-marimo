@@ -19,10 +19,7 @@ Paper results are pre-loaded from pijepa_toolkit.py.
 import marimo
 
 __generated_with = "0.23.3"
-app = marimo.App(
-    width="medium",
-    auto_download=["html"],
-)
+app = marimo.App(width="medium")
 
 
 @app.cell(hide_code=True)
