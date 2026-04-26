@@ -1,0 +1,445 @@
+"""
+PI-JEPA Toolkit
+---------------
+Closed-form computations for the PI-JEPA notebook:
+  - GRF permeability field generation
+  - 2D FDM Darcy pressure solver
+  - Spatiotemporal block masking
+  - SIGReg (Epps-Pulley sketched Gaussian test, from LeJEPA)
+  - VICReg collapse-prevention diagnostic
+  - Paper result tables (Tables 2-6 from arXiv:2604.01349)
+  - Sample complexity analysis (Proposition 1)
+"""
+
+from __future__ import annotations
+import numpy as np
+
+# ─── Palette ──────────────────────────────────────────────────────────────────
+C_PIJEPA   = "#1565C0"   # deep blue
+C_SCRATCH  = "#6A1B9A"   # deep purple
+C_FNO      = "#C62828"   # deep red
+C_PINO     = "#E65100"   # burnt orange
+C_DEEPONET = "#2E7D32"   # forest green
+C_PRETRAIN = "#00695C"   # teal (pretraining)
+C_DARK     = "#212121"
+C_GRID     = "#ECEFF1"
+C_ACCENT   = "#FF6F00"
+
+# ─── Paper result tables (arXiv:2604.01349) ───────────────────────────────────
+
+N_LABELS = [10, 25, 50, 100, 250, 500]
+
+# Table 2 — Single-phase Darcy flow (64×64, GRF permeability)
+DARCY = {
+    "PI-JEPA":  [0.481, 0.473, 0.443, 0.220, 0.142, 0.102],
+    "Scratch":  [0.469, 0.464, 0.406, 0.253, 0.169, 0.118],
+    "FNO":      [0.852, 0.706, 0.591, 0.392, 0.059, 0.054],
+    "PINO":     [0.850, 0.705, 0.588, 0.393, 0.052, 0.047],
+    "DeepONet": [2.360, 1.454, 0.994, 0.484, 0.310, 0.316],
+}
+DARCY_CI = {
+    "PI-JEPA":  [0.003, 0.005, 0.015, 0.018, 0.010, 0.011],
+    "Scratch":  [0.018, 0.022, 0.062, 0.031, 0.019, 0.012],
+    "FNO":      [0.121, 0.063, 0.042, 0.028, 0.026, 0.023],
+    "PINO":     [0.121, 0.062, 0.043, 0.023, 0.015, 0.009],
+    "DeepONet": [1.515, 0.977, 0.435, 0.154, 0.027, 0.006],
+}
+
+# Table 3 — Two-phase CO₂-water (64×64, ECLIPSE simulator, SPE10 statistics)
+TWOPHASE = {
+    "PI-JEPA":  [1.023, 0.875, 0.565, 0.425, 0.243, 0.187],
+    "Scratch":  [0.985, 0.787, 0.548, 0.437, 0.276, 0.199],
+    "FNO":      [1.261, 1.314, 1.201, 1.162, 1.157, 1.185],
+    "PINO":     [1.264, 1.311, 1.193, 1.159, 1.153, 1.183],
+    "DeepONet": [2.920, 1.447, 0.850, 0.800, 1.136, 1.059],
+}
+TWOPHASE_CI = {
+    "PI-JEPA":  [0.022, 0.023, 0.020, 0.033, 0.009, 0.005],
+    "Scratch":  [0.019, 0.022, 0.013, 0.070, 0.019, 0.007],
+    "FNO":      [0.017, 0.014, 0.005, 0.012, 0.007, 0.016],
+    "PINO":     [0.019, 0.014, 0.007, 0.015, 0.005, 0.015],
+    "DeepONet": [1.184, 0.587, 0.085, 0.125, 0.617, 0.588],
+}
+
+# Table 5 — Advection-diffusion-reaction (PDEBench ADR, Pe=1, Da=0.1)
+ADR = {
+    "PI-JEPA":  [0.109, 0.097, 0.087, 0.076, 0.065, 0.065],
+    "Scratch":  [0.110, 0.099, 0.096, 0.082, 0.070, 0.024],
+    "FNO":      [0.256, 0.208, 0.176, 0.146, 0.136, 0.122],
+    "PINO":     [0.256, 0.208, 0.176, 0.146, 0.137, 0.122],
+    "DeepONet": [0.105, 0.102, 0.081, 0.049, 0.044, 0.083],
+}
+ADR_CI = {
+    "PI-JEPA":  [0.001, 0.003, 0.015, 0.014, 0.007, 0.012],
+    "Scratch":  [0.000, 0.000, 0.000, 0.025, 0.032, 0.004],
+    "FNO":      [0.032, 0.020, 0.013, 0.005, 0.003, 0.005],
+    "PINO":     [0.032, 0.020, 0.013, 0.005, 0.004, 0.005],
+    "DeepONet": [0.021, 0.018, 0.024, 0.028, 0.035, 0.015],
+}
+
+ALL_BENCHMARKS = {
+    "Darcy (single-phase)": (DARCY, DARCY_CI),
+    "CO₂-water (two-phase)": (TWOPHASE, TWOPHASE_CI),
+    "ADR (reactive transport)": (ADR, ADR_CI),
+}
+
+# Table 6 — Ablation at Nℓ=100, Darcy benchmark (mean ± 95% CI)
+ABLATION = {
+    "Full PI-JEPA":           (0.188, 0.007),
+    "w/o physics residual":   (0.173, 0.010),   # removing it HELPS — honest negative
+    "w/o operator splitting": (0.218, 0.015),
+    "w/o VICReg":             (0.221, 0.010),
+    "w/o spatial masking":    (0.181, 0.016),
+}
+# Sign of delta vs full: positive = removes hurts (component essential)
+ABLATION_DELTA = {k: v[0] - 0.188 for k, v in ABLATION.items()}
+
+# Table 4 — Domain-matched vs cross-domain pretraining
+TRANSFER_2PHASE_NL = [100, 250, 500]
+TRANSFER_2PHASE = {
+    "Domain-matched":  [0.425, 0.243, 0.187],
+    "Darcy-pretrained": [0.410, 0.244, 0.192],
+    "Scratch":         [0.437, 0.276, 0.199],
+}
+TRANSFER_ADR_NL = [100, 250]
+TRANSFER_ADR = {
+    "Domain-matched":  [0.076, 0.065],
+    "Darcy-pretrained": [0.092, 0.084],
+    "Scratch":         [0.082, 0.070],
+}
+
+# ─── GRF permeability generation ─────────────────────────────────────────────
+
+def make_permeability_grf(n: int = 32, length_scale: float = 0.20,
+                          variance: float = 2.0, seed: int = 0) -> np.ndarray:
+    """
+    Generate a 2D log-normal permeability field K via spectral coloring.
+
+    log K ~ GP(0, C_SE(l)) where C_SE uses a squared-exponential covariance.
+    Returns K on an n×n grid.
+    """
+    rng = np.random.default_rng(seed)
+
+    # Spectral density of squared-exponential kernel (in frequency space)
+    freq = np.fft.fftfreq(n, d=1.0 / n)   # cycles per unit length
+    fx, fy = np.meshgrid(freq, freq, indexing="ij")
+    f2 = fx**2 + fy**2
+    S = np.exp(-2.0 * np.pi**2 * length_scale**2 * f2)
+    S[0, 0] = 0.0  # zero mean
+
+    # Draw complex Gaussian noise, color with S
+    noise = (rng.standard_normal((n, n)) + 1j * rng.standard_normal((n, n))) / np.sqrt(2)
+    log_K_f = noise * np.sqrt(S * n**2)
+    log_K = np.real(np.fft.ifft2(log_K_f))
+
+    # Normalize and exponentiate
+    log_K = variance * log_K / (log_K.std() + 1e-10)
+    return np.exp(log_K).astype(np.float64)
+
+
+def make_permeability_channelized(n: int = 32, n_layers: int = 4,
+                                  seed: int = 0) -> np.ndarray:
+    """
+    Realistic channelized permeability (high/low-K strata + GRF background).
+    Models the kind of spatial heterogeneity found in real reservoir sections.
+    """
+    rng = np.random.default_rng(seed)
+    K = make_permeability_grf(n, length_scale=0.25, variance=1.0, seed=seed)
+
+    x = np.linspace(0, 1, n)
+    X, Y = np.meshgrid(x, x, indexing="ij")
+
+    for _ in range(n_layers):
+        angle = rng.uniform(-np.pi / 4, np.pi / 4)
+        width = rng.uniform(0.04, 0.15)
+        pos   = rng.uniform(0.15, 0.85)
+        contrast = rng.choice([-3.5, 3.5])   # shale barrier or gravel channel
+
+        # Rotated signed distance from the stripe
+        d = np.abs(X * np.cos(angle) + Y * np.sin(angle) - pos)
+        mask = np.exp(-(d / width) ** 2)
+        K *= np.exp(contrast * mask)
+
+    return np.clip(K, 1e-6, None).astype(np.float64)
+
+
+# ─── 2D FDM Darcy pressure solver ────────────────────────────────────────────
+
+def _harmonic_mean(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Harmonic mean for face permeabilities (ensures flux continuity)."""
+    return 2.0 * a * b / (a + b + 1e-14)
+
+
+def solve_darcy_fd(K: np.ndarray) -> np.ndarray:
+    """
+    Solve -∇·(K∇p) = 0 with pressure-driven BCs:
+      p = 1  on left  (j = 0)
+      p = 0  on right (j = n-1)
+      ∂p/∂n = 0  on top/bottom  (no-flow Neumann)
+
+    Uses a 5-point cell-centered FD stencil with harmonic-mean face
+    transmissibilities.  Works on n×n grids up to ~64 comfortably.
+
+    Returns: pressure field p (n×n), same grid as K.
+    """
+    n = K.shape[0]
+    dx = 1.0 / (n - 1)
+    Tx = _harmonic_mean(K[:-1, :], K[1:, :]) / dx**2   # (n-1, n) x-faces
+    Ty = _harmonic_mean(K[:, :-1], K[:, 1:]) / dx**2   # (n, n-1) y-faces
+
+    N = n * n
+    A = np.zeros((N, N), dtype=np.float64)
+    b = np.zeros(N,      dtype=np.float64)
+
+    def idx(i: int, j: int) -> int:
+        return i * n + j
+
+    # Layout: idx(i,j) = i*n+j
+    # i = x-direction (0=left BC p=1, n-1=right BC p=0)
+    # j = y-direction (no-flow Neumann at j=0 and j=n-1)
+    # Tx[i,j]: face between x=i and x=i+1, shape (n-1, n)
+    # Ty[i,j]: face between y=j and y=j+1, shape (n, n-1)
+    for i in range(n):
+        for j in range(n):
+            k = idx(i, j)
+            if i == 0:           # left Dirichlet p=1
+                A[k, k] = 1.0; b[k] = 1.0
+            elif i == n - 1:     # right Dirichlet p=0
+                A[k, k] = 1.0; b[k] = 0.0
+            else:
+                # x-fluxes: connect to (i-1,j) via Tx[i-1,j] and (i+1,j) via Tx[i,j]
+                tw = Tx[i - 1, j]; A[k, k] += tw; A[k, idx(i-1, j)] -= tw
+                te = Tx[i,     j]; A[k, k] += te; A[k, idx(i+1, j)] -= te
+                # y-fluxes: no-flow Neumann at j=0 and j=n-1
+                if j > 0:
+                    ts = Ty[i, j - 1]; A[k, k] += ts; A[k, idx(i, j-1)] -= ts
+                if j < n - 1:
+                    tn = Ty[i, j];     A[k, k] += tn; A[k, idx(i, j+1)] -= tn
+
+    p = np.linalg.solve(A, b).reshape(n, n)
+    return p
+
+
+def darcy_velocity(K: np.ndarray, p: np.ndarray):
+    """Darcy flux u = -K ∇p, returned as (ux, uy) on the cell-centre grid."""
+    n = K.shape[0]
+    dx = 1.0 / (n - 1)
+
+    # x-component via central differences
+    ux = np.zeros_like(p)
+    ux[:, 1:-1] = -K[:, 1:-1] * (p[:, 2:] - p[:, :-2]) / (2 * dx)
+    ux[:, 0]    = -K[:, 0]    * (p[:, 1]  - p[:, 0])   / dx
+    ux[:, -1]   = -K[:, -1]   * (p[:, -1] - p[:, -2])  / dx
+
+    # y-component
+    uy = np.zeros_like(p)
+    uy[1:-1, :] = -K[1:-1, :] * (p[2:, :] - p[:-2, :]) / (2 * dx)
+    uy[0, :]    = -K[0, :]    * (p[1, :]  - p[0, :])   / dx
+    uy[-1, :]   = -K[-1, :]   * (p[-1, :] - p[-2, :])  / dx
+
+    return ux, uy
+
+
+# ─── PI-JEPA masking ─────────────────────────────────────────────────────────
+
+def spatiotemporal_block_mask(n: int = 32, context_frac: float = 0.65,
+                              seed: int = 0):
+    """
+    Spatiotemporal block masking (V-JEPA style adapted for PDEs).
+
+    Context (time t): contiguous rectangular block ≈ context_frac of domain.
+    Target  (time t+Δt): spatially displaced block ≈ (1-context_frac) area.
+
+    The predictor must anticipate the target from the context, implicitly
+    learning advection/diffusion linking one region to the next.
+
+    Returns: context_mask (n×n), target_mask (n×n) boolean arrays.
+    """
+    rng = np.random.default_rng(seed)
+
+    side_c = int(np.sqrt(context_frac) * n)
+    i0 = rng.integers(0, max(1, n - side_c))
+    j0 = rng.integers(0, max(1, n - side_c))
+
+    ctx = np.zeros((n, n), dtype=bool)
+    ctx[i0: i0 + side_c, j0: j0 + side_c] = True
+
+    side_t = max(int(np.sqrt(1 - context_frac) * n), 1)
+    i0t = (i0 + side_c // 2) % max(1, n - side_t)
+    j0t = (j0 + side_c // 2) % max(1, n - side_t)
+
+    tgt = np.zeros((n, n), dtype=bool)
+    tgt[i0t: i0t + side_t, j0t: j0t + side_t] = True
+
+    return ctx, tgt
+
+
+def operator_split_masks(n: int = 32, pressure_frac: float = 0.65,
+                         seed: int = 0):
+    """
+    Operator-split masking aligned to IMPES (Implicit Pressure Explicit Saturation):
+
+    Sub-operator L₁ (pressure):  context = full-domain pressure at t
+    Sub-operator L₂ (saturation): target = saturation update given pressure
+
+    Here we visualise this as spatial context/target blocks that a predictor
+    must bridge, mirroring the two-predictor bank in PI-JEPA.
+    """
+    rng = np.random.default_rng(seed)
+
+    # L₁ context: broad pressure-solving region (global influence)
+    ctx_L1 = np.ones((n, n), dtype=bool)          # pressure sees everything
+    ctx_L1[n//4: 3*n//4, n//4: 3*n//4] = False   # leave interior for target
+
+    # L₂ target: displaced saturation front region
+    side_t = n // 3
+    i0 = rng.integers(n//4, n - side_t - n//4)
+    j0 = rng.integers(n//4, n - side_t - n//4)
+    tgt_L2 = np.zeros((n, n), dtype=bool)
+    tgt_L2[i0: i0 + side_t, j0: j0 + side_t] = True
+
+    return ctx_L1, tgt_L2
+
+
+# ─── SIGReg  (LeJEPA, Definition 2) ─────────────────────────────────────────
+
+def sigreg_epps_pulley(Z: np.ndarray, n_slices: int = 64,
+                       t_lim: float = 5.0, n_t: int = 17,
+                       seed: int = 0) -> float:
+    """
+    Sketched Isotropic Gaussian Regularisation (SIGReg).
+
+    Projects embeddings Z ∈ ℝ^{N×K} onto n_slices random unit directions,
+    then evaluates the Epps-Pulley characteristic-function test against N(0,1).
+
+    Returns the scalar loss value (0 = perfectly Gaussian marginals).
+    """
+    N, K = Z.shape
+    rng  = np.random.default_rng(seed)
+
+    A = rng.standard_normal((K, n_slices))
+    A /= np.linalg.norm(A, axis=0, keepdims=True) + 1e-10
+
+    Z_proj = Z @ A            # (N, M)
+
+    t = np.linspace(-t_lim, t_lim, n_t)
+    phi_N01 = np.exp(-0.5 * t**2)   # target CF: ℰ[e^{itX}] for X∼N(0,1)
+
+    x_t   = Z_proj[:, :, None] * t[None, None, :]   # (N, M, T)
+    ecf_r = np.cos(x_t).mean(axis=0)                 # (M, T)
+    ecf_i = np.sin(x_t).mean(axis=0)                 # (M, T)
+
+    err = ((ecf_r - phi_N01)**2 + ecf_i**2) * phi_N01
+    return float(np.trapezoid(err, dx=(2 * t_lim / (n_t - 1)), axis=1).mean() * N)
+
+
+def gaussian_test_sweep(d_vals=None, n_slices_vals=None, N: int = 512, seed: int = 0):
+    """
+    Demonstrate how SIGReg detects anisotropy vs isotropy across embedding
+    dimensions d and numbers of projection slices M (for the SIGReg figure).
+    """
+    if d_vals       is None: d_vals       = [16, 32, 64, 128, 256]
+    if n_slices_vals is None: n_slices_vals = [8, 16, 32, 64, 128, 256]
+
+    rng = np.random.default_rng(seed)
+    results = {}
+    for d in d_vals:
+        # Isotropic Gaussian embeddings
+        Z_iso = rng.standard_normal((N, d))
+        # Anisotropic: first half of dims collapsed
+        Z_aniso = Z_iso.copy()
+        Z_aniso[:, :d//2] *= 0.01
+        results[d] = {}
+        for M in n_slices_vals:
+            loss_iso   = sigreg_epps_pulley(Z_iso,   n_slices=M, seed=seed)
+            loss_aniso = sigreg_epps_pulley(Z_aniso, n_slices=M, seed=seed)
+            results[d][M] = {"iso": loss_iso, "aniso": loss_aniso,
+                             "ratio": loss_aniso / (loss_iso + 1e-10)}
+    return results
+
+
+# ─── VICReg collapse diagnostic ──────────────────────────────────────────────
+
+def vicreg_diagnostic(Z: np.ndarray, eps: float = 1e-4):
+    """
+    Compute VICReg variance and covariance terms for collapse monitoring.
+
+    Returns:
+      var_violation: fraction of dimensions with std < 1 - ε (should → 0)
+      cov_off_diag : mean |off-diagonal covariance| (should → 0)
+      eig_spectrum  : sorted descending eigenvalues of the sample covariance
+    """
+    N, D = Z.shape
+    Zc = Z - Z.mean(axis=0)
+
+    std = Zc.std(axis=0)
+    var_violation = float((std < (1 - eps)).mean())
+
+    C = (Zc.T @ Zc) / (N - 1)
+    off_diag = C.copy()
+    np.fill_diagonal(off_diag, 0.0)
+    cov_off_diag = float(np.abs(off_diag).mean())
+
+    eigs = np.linalg.eigvalsh(C)[::-1]   # descending
+
+    return var_violation, cov_off_diag, eigs
+
+
+# ─── Sample complexity analysis  (Proposition 1) ────────────────────────────
+
+def sample_complexity_advantage(n_grid: int = 64, d_latent: int = 384,
+                                K_operators: int = 2) -> dict:
+    """
+    Proposition 1: PI-JEPA reduces fine-tuning sample complexity from
+      O(n² / ε²)        (supervised baseline)  to
+      O(d² K / ε²)      (PI-JEPA fine-tuning)
+
+    Ratio: n² / (d² K) — how many times fewer labels PI-JEPA needs.
+    """
+    n2  = (n_grid) ** 2
+    den = d_latent**2 * K_operators
+    return {
+        "n_grid": n_grid,
+        "d_latent": d_latent,
+        "K_operators": K_operators,
+        "n_params_supervised": n2,
+        "n_params_pijepa": den,
+        "ratio": n2 / den,
+    }
+
+
+def sample_complexity_surface(n_grids=None, d_latents=None, K: int = 2):
+    """
+    2D grid of sample-complexity ratios n² / (d²K) for the phase diagram.
+    """
+    if n_grids  is None: n_grids  = [16, 32, 48, 64, 96, 128]
+    if d_latents is None: d_latents = [32, 64, 128, 256, 384, 512]
+
+    ratios = np.array([[ng**2 / (dl**2 * K) for dl in d_latents]
+                        for ng in n_grids])
+    return np.array(n_grids), np.array(d_latents), ratios
+
+
+# ─── Simulation cost model ───────────────────────────────────────────────────
+
+def cost_model(n_unlabeled: int = 1000, n_labeled: int = 100,
+               cost_per_unlabeled: float = 5e-4,   # seconds (geostat sampling)
+               cost_per_labeled: float = 3600.0):  # seconds (full PDE solve)
+    """
+    Illustrate the data asymmetry.
+    """
+    return {
+        "unlabeled": {
+            "count": n_unlabeled,
+            "unit_cost_s": cost_per_unlabeled,
+            "total_cost_s": n_unlabeled * cost_per_unlabeled,
+            "total_cost_h": n_unlabeled * cost_per_unlabeled / 3600,
+        },
+        "labeled": {
+            "count": n_labeled,
+            "unit_cost_s": cost_per_labeled,
+            "total_cost_s": n_labeled * cost_per_labeled,
+            "total_cost_h": n_labeled * cost_per_labeled / 3600,
+        },
+        "ratio": cost_per_labeled / cost_per_unlabeled,
+    }
